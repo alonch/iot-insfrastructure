@@ -22,6 +22,10 @@
 #include <math.h>
 #include <Adafruit_GFX.h>
 
+#define MAX(x, y) (((x) > (y)) ? (x) : (y))
+#define MIN(x, y) (((x) < (y)) ? (x) : (y))
+#define WIDTH      159
+#define HEIGHT     127 
 #define   SDI_PIN   23    // SDI (serial mode) signal connected to pin 6
 #define   SCL_PIN   18    // SCL (serial mdoe) signal connected to pin 7
 #define    RS_PIN    5    // RS signal connected to pin 8
@@ -49,7 +53,11 @@ class Package
     void Tick();
     bool HasReachDestination(); 
     void Draw(GFXcanvas16* canvas);
-    
+    unsigned char rect_x1;
+    unsigned char rect_y1;
+    unsigned char rect_x2;
+    unsigned char rect_y2;
+    int _color;
   private:
     int _current;
     int _distance;
@@ -60,24 +68,30 @@ class Package
     int _speed;
     float _angle;
     int _len;
-    int _color;
+    
+    
 };
 
-Package::Package(int src_x, int src_y, int dest_x, int dest_y, int pace, int len, int color)
+Package::Package(int src_x, int src_y, int dest_x, int dest_y, int pace, int len, int c)
 {
   _current = 0;
   _src_x = src_x;
   _src_y = src_y;
   _speed = pace;
   _len = len;
-  _color = color;
+  _color = c;
   _dest_x = dest_x;
   _dest_y = dest_y;
   int x=dest_x - src_x;
   int y=dest_y - src_y;
   _distance = sqrt((x*x) + (y*y));  
   _angle = atan2(y, x);
+  rect_x1 = MAX(0, src_x - len);
+  rect_y1 = MAX(0, src_y - len);
+  rect_x2 = MIN(WIDTH, src_x + len);
+  rect_y2 = MIN(HEIGHT, src_y + len);
 }
+
 
 void Package::Tick(){
   if (HasReachDestination()){
@@ -90,14 +104,21 @@ void Package::Tick(){
 void Package::Draw(GFXcanvas16* canvas){
   int x = _current * cos(_angle) + _src_x;
   int y = _current * sin(_angle) + _src_y;
+  rect_x1 = MAX(0, x - _len);
+  rect_y1 = MAX(0, y - _len);
+  rect_x2 = MIN(WIDTH, x + _len);
+  rect_y2 = MIN(HEIGHT, y + _len);
   canvas->fillCircle(x, y, _len, _color);
+  //canvas->drawRect(rect_x1, rect_y1, _len*2, _len*2, _color);
 }
 
 bool Package::HasReachDestination(){
   return _current > _distance;
 }
 
-static GFXcanvas16 canvas = GFXcanvas16(160, 128);
+
+static GFXcanvas16 canvas = GFXcanvas16(WIDTH+1, HEIGHT+1);
+static GFXcanvas16 canvas_bg = GFXcanvas16(WIDTH+1, HEIGHT+1);
 
 
 /*********************************/
@@ -243,12 +264,37 @@ void OLED_FillScreen_160128RGB565(int16_t color)    // fill screen with a given 
     }
 }
 
-void draw_canvas()
+void OLED_FillRectRGB565(unsigned char x1, unsigned char y1, unsigned char x2, unsigned char y2, GFXcanvas16* fcanvas)
+{
+    unsigned int i,j;
+    int x = x2 - x1;
+    int y = y2 - y1;
+    if (x <= 0 || y <= 0){
+      return;
+    }
+    OLED_SetPosition_160128RGB(x1,y1);
+    OLED_SetColumnAddress_160128RGB(x1, x2-1);
+    OLED_SetRowAddress_160128RGB(y1, y2-1);
+    OLED_WriteMemoryStart_160128RGB();
+    
+    for(j=0;j<y;j++)
+    {
+      for(i=0;i<x;i++){        
+        int pixel = fcanvas->getPixel(i+x1,j+y1);
+        OLED_Pixel_160128RGB565(pixel);  
+      }
+      
+    }
+}
+
+void draw_canvas_bg()
 {
     unsigned int i;
     OLED_SetPosition_160128RGB(0,0);
+    OLED_SetColumnAddress_160128RGB(0, WIDTH);
+    OLED_SetRowAddress_160128RGB(0, HEIGHT);
     OLED_WriteMemoryStart_160128RGB();
-    uint16_t* buffer = canvas.getBuffer();
+    uint16_t* buffer = canvas_bg.getBuffer();
     for(i=0;i<20480;i++)
     {
         OLED_Pixel_160128RGB565(buffer[i]);
@@ -264,7 +310,25 @@ void draw_canvas()
 /******** INITIALIZATION *********/
 /************ START **************/
 /*********************************/
-
+void ESP_32_Init_Pins(){
+    pinMode(LVL_OEN, OUTPUT);                       // configure LVL_OEN as output
+    digitalWrite(LVL_OEN, LOW);
+    pinMode(LVL_DIR, OUTPUT);                       // configure LVL_DIR as output
+    digitalWrite(LVL_DIR, HIGH);
+    //DDRD = 0xFF;                                    // configure PORTD as output
+    pinMode(RS_PIN, OUTPUT);                        // configure RS_PIN as output
+    pinMode(RES_PIN, OUTPUT);                       // configure RES_PIN as output
+    pinMode(CS_PIN, OUTPUT);                        // configure CS_PIN as output
+    pinMode(PS_PIN, OUTPUT);                        // configure PS_PIN as output
+    pinMode(CPU_PIN, OUTPUT);                       // configure CPU_PIN as output
+    digitalWrite(LVL_OEN, LOW);
+    digitalWrite(CS_PIN, HIGH);                     // set CS_PIN
+    
+    pinMode(SDI_PIN, OUTPUT);                   // configure SDI_PIN as output
+    pinMode(SCL_PIN, OUTPUT);                   // configure SCL_PIN as output
+    //PORTD = 0x00;                               // reset SDI_PIN and SCL_PIN, ground DB[5..0] of the display
+    digitalWrite(PS_PIN, LOW);                  // reset PS_PIN
+}
 void OLED_Init_160128RGB(void)      //OLED initialization
 {
     digitalWrite(RES_PIN, LOW);
@@ -322,67 +386,55 @@ void OLED_Init_160128RGB(void)      //OLED initialization
     OLED_Data_160128RGB(0x00); // Set All Internal Register Value as Normal Mode
     OLED_Command_160128RGB(0x15);
     OLED_Data_160128RGB(0x00); // Set RGB Interface Polarity as Active Low
-    OLED_SetColumnAddress_160128RGB(0, 159);
-    OLED_SetRowAddress_160128RGB(0, 127);
+    OLED_SetColumnAddress_160128RGB(0, WIDTH);
+    OLED_SetRowAddress_160128RGB(0, HEIGHT);
 }
+
 
 /*===============================*/
 /*======= INITIALIZATION ========*/
 /*============= END =============*/
 /*===============================*/
-int package_size = 4;
-Package package[4] = {
-  Package(5, 30, 115, 5, 10, 5, 0x2D85),
-  Package(5, 30, 155, 30, 10, 5, 0x2D85),//good
-  Package(5, 96, 115, 123, 10, 5, 0xFFE0),
-  Package(5, 96, 155, 96, 10, 5, 0xFFE0)//good
+int package_size = 5;
+Package package[5] = {
+  Package(0, 0, 0, 0, 0, 5, 0xF800),
+  Package(5, 30, 115, 5, 1, 5, 0x2D85),
+  Package(5, 30, 155, 30, 2, 5, 0x2D85),//good
+  Package(5, 96, 115, 123, 3, 5, 0xFFE0),
+  Package(5, 96, 155, 96, 4, 5, 0xFFE0)//good
 };
   
 void setup()                                       // for Arduino, runs first at power on
 {
     Serial.begin(115200);
-    pinMode(LVL_OEN, OUTPUT);                       // configure LVL_OEN as output
-    digitalWrite(LVL_OEN, LOW);
-    pinMode(LVL_DIR, OUTPUT);                       // configure LVL_DIR as output
-    digitalWrite(LVL_DIR, HIGH);
-    //DDRD = 0xFF;                                    // configure PORTD as output
-    pinMode(RS_PIN, OUTPUT);                        // configure RS_PIN as output
-    pinMode(RES_PIN, OUTPUT);                       // configure RES_PIN as output
-    pinMode(CS_PIN, OUTPUT);                        // configure CS_PIN as output
-    pinMode(PS_PIN, OUTPUT);                        // configure PS_PIN as output
-    pinMode(CPU_PIN, OUTPUT);                       // configure CPU_PIN as output
-    digitalWrite(LVL_OEN, LOW);
-    digitalWrite(CS_PIN, HIGH);                     // set CS_PIN
+    ESP_32_Init_Pins();
+    OLED_Init_160128RGB();   
+    canvas_bg.fillScreen(0x00);
+    canvas_bg.fillRect(30, 0, 20, 5, 0x8430);
+    canvas_bg.fillRect(110, 0, 20, 5, 0x8430);
+    canvas_bg.fillRect(30, 123, 20, 5, 0x8430);
+    canvas_bg.fillRect(110, 123, 20, 5, 0x8430);
     
-    pinMode(SDI_PIN, OUTPUT);                   // configure SDI_PIN as output
-    pinMode(SCL_PIN, OUTPUT);                   // configure SCL_PIN as output
-    //PORTD = 0x00;                               // reset SDI_PIN and SCL_PIN, ground DB[5..0] of the display
-    digitalWrite(PS_PIN, LOW);                  // reset PS_PIN
-    OLED_Init_160128RGB(); 
+    canvas_bg.fillRect(0, 22, 5, 20, 0x8430);
+    canvas_bg.fillRect(0, 86, 5, 20, 0x8430);
+    canvas_bg.fillRect(155, 22, 5, 20, 0x8430);
+    canvas_bg.fillRect(155, 86, 5, 20, 0x8430);
+
+    canvas_bg.drawLine(80, 0, 80, 128 ,0x8430);
+    canvas_bg.drawLine(0, 64, 160, 64 ,0x8430);
+    draw_canvas_bg();
 }
 
 void loop()                                         // main loop, runs after "setup()"
 {
-      canvas.fillScreen(0x00);
-      canvas.fillRect(30, 0, 20, 5, 0x8430);
-      canvas.fillRect(110, 0, 20, 5, 0x8430);
-      canvas.fillRect(30, 123, 20, 5, 0x8430);
-      canvas.fillRect(110, 123, 20, 5, 0x8430);
-      
-      canvas.fillRect(0, 22, 5, 20, 0x8430);
-      canvas.fillRect(0, 86, 5, 20, 0x8430);
-      canvas.fillRect(155, 22, 5, 20, 0x8430);
-      canvas.fillRect(155, 86, 5, 20, 0x8430);
-
-      canvas.drawLine(80, 0, 80, 128 ,0x8430);
-      canvas.drawLine(0, 64, 160, 64 ,0x8430);
       
       for(int i=0; i<package_size; i++){
+        
+        OLED_FillRectRGB565(package[i].rect_x1, package[i].rect_y1, package[i].rect_x2, package[i].rect_y2, &canvas_bg); 
         package[i].Tick();
-        package[i].Draw(&canvas);  
+        canvas.fillScreen(0x00);
+        package[i].Draw(&canvas); 
+        OLED_FillRectRGB565(package[i].rect_x1, package[i].rect_y1, package[i].rect_x2, package[i].rect_y2, &canvas); 
       }
-      
-      draw_canvas();
-      
     
 }
