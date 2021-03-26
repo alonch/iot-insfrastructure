@@ -1,26 +1,24 @@
-//---------------------------------------------------------
-/*
- 
- test.ino
- 
- Program for writing to Newhaven Display's 160x128 Graphic Color OLED with SEPS525 controller.
- 
- Pick one up today in the Newhaven Display shop!
- ------> http://www.newhavendisplay.com/nhd169160128ugc3-p-5603.html
- 
- This code is written for the Arduino Uno R3.
+#include <Adafruit_NeoPixel.h>
+#ifdef __AVR__
+ #include <avr/power.h> // Required for 16 MHz Adafruit Trinket
+#endif
 
- Copyright (c) 2015 - Newhaven Display International, LLC.
- w
- Newhaven Display invests time and resources providing this open source code,
- please support Newhaven Display by purchasing products from Newhaven Display!
- 
-  */
-//---------------------------------------------------------
+// Which pin on the Arduino is connected to the NeoPixels?
+#define PIN        13 // On Trinket or Gemma, suggest changing this to 1
+
+// How many NeoPixels are attached to the Arduino?
+#define NUMPIXELS 15 // Popular NeoPixel ring size
+#define ROW_SIZE 5
+// When setting up the NeoPixel library, we tell it how many pixels,
+// and which pin to use to send signals. Note that for older NeoPixel
+// strips you might need to change the third parameter -- see the
+// strandtest example for more information on possible values.
+Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
 
 // The 8 bit data bus is connected to PORTD[7..0]
 #include <math.h>
 #include <Adafruit_GFX.h>
+#include <AsyncDelay.h>
 
 #define MAX(x, y) (((x) > (y)) ? (x) : (y))
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
@@ -46,6 +44,140 @@
 #define  WHITE  0xFFFFFF
 #define  BLACK  0x000000
 
+uint32_t Wheel() {
+  int WheelPos = millis();
+//  return pixels.Color(0, 0, 125);
+  WheelPos /= 4;
+  WheelPos %= 255;
+  if(WheelPos < 85) {
+   return pixels.Color(WheelPos * 3, 255 - WheelPos * 3, 0);
+  } else if(WheelPos < 170) {
+   WheelPos -= 85;
+   return pixels.Color(255 - WheelPos * 3, 0, WheelPos * 3);
+  } else {
+   WheelPos -= 170;
+   return pixels.Color(0, WheelPos * 3, 255 - WheelPos * 3);
+  }
+  
+}
+
+int TimeToDistance(int current){
+  if (current < 100){
+    return 0;    
+  }
+  if (current < 500){
+    return 1;
+  }
+  if (current < 1000){
+    return 2;
+  }
+  if (current < 5000){
+    return 3;
+  }
+
+  return 4;
+}
+
+uint32_t StatusCodeToColor(int status_code){
+  if (status_code < 399){
+    return pixels.Color(0, 125, 0);  
+  }
+  if (status_code < 499){
+    return pixels.Color(125, 125, 0);  
+  } 
+  return pixels.Color(125, 0, 0);  
+}
+
+void UpdatePixels(int start_led, int colors[]){
+  for(int i=0; i<ROW_SIZE; i++){
+    uint32_t color = colors[i];
+    if (color == -1){
+      color = Wheel();
+    }
+    pixels.setPixelColor(start_led + i, color);
+  }
+}
+
+class Request
+{
+  public: 
+    Request(int dest, int read_latency, int status_code, int write_latency, int process_latency);
+    void Draw();
+    bool IsDone();
+    void Start();
+    
+  private:
+    int _led_pos = 0;
+    int _dest;
+    int _read_latency;
+    int _status_code;
+    int _write_latency;
+    int _process_latency;
+    AsyncDelay async_read;
+    AsyncDelay async_process;
+    AsyncDelay async_write;
+    AsyncDelay async_backoff;
+    int _leds_colors [ROW_SIZE] = { };
+    
+};
+
+Request::Request(int dest, int read_latency, int status_code, int write_latency, int process_latency){
+  _dest=dest * ROW_SIZE;
+  _read_latency=read_latency;
+  _status_code=status_code;
+  _write_latency=write_latency;
+  _process_latency=process_latency;
+}
+
+void Request::Start(){
+  if (!async_backoff.isExpired()){
+    return;
+  }
+  async_read.start(_read_latency, AsyncDelay::MILLIS);
+  async_process.start(_read_latency+_process_latency, AsyncDelay::MILLIS);
+  async_write.start(_read_latency+_process_latency+_write_latency, AsyncDelay::MILLIS);
+  _led_pos = 0;
+  
+  async_backoff.start(_read_latency+_process_latency+_write_latency + 500, AsyncDelay::MILLIS);
+  for(int i=0; i<ROW_SIZE; i++){
+    _leds_colors[i] = 0;
+  }
+  UpdatePixels(_dest, _leds_colors);
+}
+
+bool Request::IsDone(){
+  return async_read.isExpired() && async_process.isExpired() && async_write.isExpired();
+}
+
+void Request::Draw(){
+  if (!async_read.isExpired()){
+    _led_pos = TimeToDistance(async_read.getDelay() + async_read.getDuration());
+    _leds_colors[_led_pos] =  pixels.Color(75, 75, 75);
+    UpdatePixels(_dest, _leds_colors);
+    return;
+  }
+
+  if (!async_process.isExpired()){
+    _led_pos = TimeToDistance(async_process.getDelay() + async_process.getDuration());
+    _leds_colors[_led_pos] =  -1;
+    UpdatePixels(_dest, _leds_colors);
+    return;
+  }
+
+  if (!async_write.isExpired()){
+    _led_pos = TimeToDistance(async_write.getDelay() + async_write.getDuration());
+    _leds_colors[_led_pos] = StatusCodeToColor(_status_code);
+    UpdatePixels(_dest, _leds_colors);
+    return;
+  }
+
+  for(int i=0; i<ROW_SIZE; i++){
+    _leds_colors[i] = StatusCodeToColor(_status_code);
+  }
+  UpdatePixels(_dest, _leds_colors);
+}
+
+
 class Package
 {
   public:
@@ -68,8 +200,6 @@ class Package
     int _speed;
     float _angle;
     int _len;
-    
-    
 };
 
 Package::Package(int src_x, int src_y, int dest_x, int dest_y, int pace, int len, int c)
@@ -403,38 +533,59 @@ Package package[5] = {
   Package(5, 96, 115, 123, 3, 5, 0xFFE0),
   Package(5, 96, 155, 96, 4, 5, 0xFFE0)//good
 };
-  
+
+//Request(int dest, int read_latency, int status_code, int write_latency, int process_latency);
+#define REQUEST_SIZE 3
+Request requests[REQUEST_SIZE] = {
+  Request(0, 550, 500, 100, 5000),
+  Request(1,80, 201, 2000, 100),
+  Request(2,4000, 201, 800, 200)
+};
+
 void setup()                                       // for Arduino, runs first at power on
 {
     Serial.begin(115200);
-    ESP_32_Init_Pins();
-    OLED_Init_160128RGB();   
-    canvas_bg.fillScreen(0x00);
-    canvas_bg.fillRect(30, 0, 20, 5, 0x8430);
-    canvas_bg.fillRect(110, 0, 20, 5, 0x8430);
-    canvas_bg.fillRect(30, 123, 20, 5, 0x8430);
-    canvas_bg.fillRect(110, 123, 20, 5, 0x8430);
-    
-    canvas_bg.fillRect(0, 22, 5, 20, 0x8430);
-    canvas_bg.fillRect(0, 86, 5, 20, 0x8430);
-    canvas_bg.fillRect(155, 22, 5, 20, 0x8430);
-    canvas_bg.fillRect(155, 86, 5, 20, 0x8430);
+//    ESP_32_Init_Pins();
+//    OLED_Init_160128RGB();   
+//    canvas_bg.fillScreen(0x00);
+//    canvas_bg.fillRect(30, 0, 20, 5, 0x8430);
+//    canvas_bg.fillRect(110, 0, 20, 5, 0x8430);
+//    canvas_bg.fillRect(30, 123, 20, 5, 0x8430);
+//    canvas_bg.fillRect(110, 123, 20, 5, 0x8430);
+//    
+//    canvas_bg.fillRect(0, 22, 5, 20, 0x8430);
+//    canvas_bg.fillRect(0, 86, 5, 20, 0x8430);
+//    canvas_bg.fillRect(155, 22, 5, 20, 0x8430);
+//    canvas_bg.fillRect(155, 86, 5, 20, 0x8430);
+//
+//    canvas_bg.drawLine(80, 0, 80, 128 ,0x8430);
+//    canvas_bg.drawLine(0, 64, 160, 64 ,0x8430);
+//    draw_canvas_bg();
 
-    canvas_bg.drawLine(80, 0, 80, 128 ,0x8430);
-    canvas_bg.drawLine(0, 64, 160, 64 ,0x8430);
-    draw_canvas_bg();
+    pixels.begin();
+    pixels.setBrightness(64);
+
 }
 
 void loop()                                         // main loop, runs after "setup()"
 {
+    pixels.clear();
+    for(int i=0; i<package_size; i++){
       
-      for(int i=0; i<package_size; i++){
-        
-        OLED_FillRectRGB565(package[i].rect_x1, package[i].rect_y1, package[i].rect_x2, package[i].rect_y2, &canvas_bg); 
-        package[i].Tick();
-        canvas.fillScreen(0x00);
-        package[i].Draw(&canvas); 
-        OLED_FillRectRGB565(package[i].rect_x1, package[i].rect_y1, package[i].rect_x2, package[i].rect_y2, &canvas); 
+      OLED_FillRectRGB565(package[i].rect_x1, package[i].rect_y1, package[i].rect_x2, package[i].rect_y2, &canvas_bg); 
+      package[i].Tick();
+      canvas.fillScreen(0x00);
+      package[i].Draw(&canvas); 
+      OLED_FillRectRGB565(package[i].rect_x1, package[i].rect_y1, package[i].rect_x2, package[i].rect_y2, &canvas); 
+    }
+
+    for(int i=0; i<REQUEST_SIZE; i++){
+      requests[i].Draw();
+      if (requests[i].IsDone()){
+        requests[i].Start();
       }
+    }
     
+    pixels.show();
+    delay(20);
 }
