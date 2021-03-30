@@ -4,7 +4,7 @@
 #endif
 
 // Which pin on the Arduino is connected to the NeoPixels?
-#define PIN        13 // On Trinket or Gemma, suggest changing this to 1
+#define PIN        32//13 // On Trinket or Gemma, suggest changing this to 1
 
 // How many NeoPixels are attached to the Arduino?
 #define NUMPIXELS 15 // Popular NeoPixel ring size
@@ -14,6 +14,7 @@
 // strips you might need to change the third parameter -- see the
 // strandtest example for more information on possible values.
 Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
+Adafruit_NeoPixel pixels_lb(5, 13, NEO_GRB + NEO_KHZ800);
 
 // The 8 bit data bus is connected to PORTD[7..0]
 #include <math.h>
@@ -24,15 +25,15 @@ Adafruit_NeoPixel pixels(NUMPIXELS, PIN, NEO_GRB + NEO_KHZ800);
 #define MIN(x, y) (((x) < (y)) ? (x) : (y))
 #define WIDTH      159
 #define HEIGHT     127 
-#define   SDI_PIN   23    // SDI (serial mode) signal connected to pin 6
-#define   SCL_PIN   18    // SCL (serial mdoe) signal connected to pin 7
-#define    RS_PIN    5    // RS signal connected to pin 8
+#define   SDI_PIN   15//23    // SDI (serial mode) signal connected to pin 6
+#define   SCL_PIN   16//18    // SCL (serial mdoe) signal connected to pin 7
+#define    RS_PIN   17//5    // RS signal connected to pin 8
 #define    RW_PIN    9    // R/W (6800 mode) signal connected to pin 9
 #define    WR_PIN    9    // /WR (8080 mode) signal connected to pin 9
 #define     E_PIN    9    // E (6800 mode) signal connected to pin 10
 #define    RD_PIN    9    // /RD (8080 mode) signal connected to pin 10
-#define   RES_PIN    0    // /RES signal connected to pin 11
-#define    CS_PIN   15    // /CS signal connected to pin 12
+#define   RES_PIN   21//0    // /RES signal connected to pin 11
+#define    CS_PIN   22//15    // /CS signal connected to pin 12
 #define    PS_PIN    9    // PS signal connected to pin A0
 #define   CPU_PIN    9    // CPU signal connected to pin A1
 #define   LVL_DIR    9    // DIR (direction control) signal of level shifter IC connected to pin A2
@@ -146,10 +147,17 @@ void Request::Start(){
 }
 
 bool Request::IsDone(){
-  return async_read.isExpired() && async_process.isExpired() && async_write.isExpired();
+  return async_read.isExpired() && async_process.isExpired() && async_write.isExpired() && async_backoff.isExpired();
 }
 
 void Request::Draw(){
+  if (IsDone()){
+    for(int i=0; i<ROW_SIZE; i++){
+      _leds_colors[i] = 0;
+    }
+    UpdatePixels(_dest, _leds_colors);
+    return;
+  }
   if (!async_read.isExpired()){
     _led_pos = TimeToDistance(async_read.getDelay() + async_read.getDuration());
     _leds_colors[_led_pos] =  pixels.Color(75, 75, 75);
@@ -525,67 +533,91 @@ void OLED_Init_160128RGB(void)      //OLED initialization
 /*======= INITIALIZATION ========*/
 /*============= END =============*/
 /*===============================*/
-int package_size = 5;
-Package package[5] = {
-  Package(0, 0, 0, 0, 0, 5, 0xF800),
-  Package(5, 30, 115, 5, 1, 5, 0x2D85),
-  Package(5, 30, 155, 30, 2, 5, 0x2D85),//good
-  Package(5, 96, 115, 123, 3, 5, 0xFFE0),
-  Package(5, 96, 155, 96, 4, 5, 0xFFE0)//good
+
+//Package(int src_x, int src_y, int dest_x, int dest_y, int pace, int len, int color);
+#define PACKAGE_SIZE 1
+Package package[PACKAGE_SIZE] = {
+  //Package(0, 0, 0, 0, 0, 5, 0xF800),
+  //Package(5, 30, 115, 5, 1, 5, 0x2D85),
+  Package(5, 30, 155, 30, 1, 5, 0x2D85),//good
+  //Package(5, 96, 115, 123, 3, 5, 0xFFE0),
+  //Package(5, 96, 155, 96, 4, 5, 0xFFE0)//good
 };
 
 //Request(int dest, int read_latency, int status_code, int write_latency, int process_latency);
 #define REQUEST_SIZE 3
 Request requests[REQUEST_SIZE] = {
   Request(0, 550, 500, 100, 5000),
-  Request(1,80, 201, 2000, 100),
-  Request(2,4000, 201, 800, 200)
+  Request(1,80, 201, 500, 10),
+  Request(2,2000, 201, 600, 200)
 };
-
+AsyncDelay async_frames;
 void setup()                                       // for Arduino, runs first at power on
 {
     Serial.begin(115200);
-//    ESP_32_Init_Pins();
-//    OLED_Init_160128RGB();   
-//    canvas_bg.fillScreen(0x00);
-//    canvas_bg.fillRect(30, 0, 20, 5, 0x8430);
-//    canvas_bg.fillRect(110, 0, 20, 5, 0x8430);
-//    canvas_bg.fillRect(30, 123, 20, 5, 0x8430);
-//    canvas_bg.fillRect(110, 123, 20, 5, 0x8430);
-//    
-//    canvas_bg.fillRect(0, 22, 5, 20, 0x8430);
-//    canvas_bg.fillRect(0, 86, 5, 20, 0x8430);
-//    canvas_bg.fillRect(155, 22, 5, 20, 0x8430);
-//    canvas_bg.fillRect(155, 86, 5, 20, 0x8430);
-//
-//    canvas_bg.drawLine(80, 0, 80, 128 ,0x8430);
-//    canvas_bg.drawLine(0, 64, 160, 64 ,0x8430);
-//    draw_canvas_bg();
+    ESP_32_Init_Pins();
+    OLED_Init_160128RGB();   
+    canvas_bg.fillScreen(0x00);
+    canvas_bg.fillRect(30, 0, 20, 5, 0x8430);
+    canvas_bg.fillRect(110, 0, 20, 5, 0x8430);
+    canvas_bg.fillRect(30, 123, 20, 5, 0x8430);
+    canvas_bg.fillRect(110, 123, 20, 5, 0x8430);
+    
+    canvas_bg.fillRect(0, 22, 5, 20, 0x8430);
+    canvas_bg.fillRect(0, 86, 5, 20, 0x8430);
+    canvas_bg.fillRect(155, 22, 5, 20, 0x8430);
+    canvas_bg.fillRect(155, 86, 5, 20, 0x8430);
+
+    canvas_bg.drawLine(80, 0, 80, 128 ,0x8430);
+    canvas_bg.drawLine(0, 64, 160, 64 ,0x8430);
+    draw_canvas_bg();
 
     pixels.begin();
-    pixels.setBrightness(64);
-
+    pixels.setBrightness(32);
+    pixels.clear();
+    pixels.show();
+    pixels_lb.begin();
+    pixels_lb.setBrightness(32);
+    pixels_lb.clear();
+    pixels_lb.setPixelColor(4, pixels.Color(0, 150, 0));
+    pixels_lb.show();
+    async_frames.start(10, AsyncDelay::MILLIS);
+    
+  
 }
-
+int request_current = 0;
 void loop()                                         // main loop, runs after "setup()"
 {
+    if (async_frames.isExpired()){
+      async_frames.restart();
+    }else{
+      return;
+    }
+    request_current %= REQUEST_SIZE;
     pixels.clear();
-    for(int i=0; i<package_size; i++){
+    for(int i=0; i<PACKAGE_SIZE; i++){
       
       OLED_FillRectRGB565(package[i].rect_x1, package[i].rect_y1, package[i].rect_x2, package[i].rect_y2, &canvas_bg); 
       package[i].Tick();
       canvas.fillScreen(0x00);
       package[i].Draw(&canvas); 
       OLED_FillRectRGB565(package[i].rect_x1, package[i].rect_y1, package[i].rect_x2, package[i].rect_y2, &canvas); 
+      if (package[i].HasReachDestination()){
+        for(int j=0; i<REQUEST_SIZE; j++){
+          if (requests[j].IsDone()){
+              requests[j].Start();  
+              break;
+          }
+        }
+        
+      }
+      //
     }
 
     for(int i=0; i<REQUEST_SIZE; i++){
       requests[i].Draw();
-      if (requests[i].IsDone()){
-        requests[i].Start();
-      }
     }
     
     pixels.show();
-    delay(20);
+    
 }
